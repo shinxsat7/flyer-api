@@ -1,4 +1,5 @@
 import io
+import os
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
