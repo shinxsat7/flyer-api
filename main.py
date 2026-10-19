@@ -47,8 +47,12 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
     スマホアプリからアップロードされた画像を受信し、
     Gemini APIで解析してSupabaseへ保存します。
     """
-    # 1. 画像ファイルのバリデーション・読み込み
-    if not file.content_type.startswith("image/"):
+
+    # 1. 画像ファイルのバリデーション・読み込み（拡張子やMIMEタイプを柔軟にチェック）
+    filename = file.filename.lower() if file.filename else ""
+    is_image_ext = filename.endswith((".jpg", ".jpeg", ".png", ".heic", ".webp"))
+    
+    if not (file.content_type.startswith("image/") or is_image_ext):
         raise HTTPException(status_code=400, detail="アップロードされたファイルは画像ではありません。")
     
     try:
@@ -56,6 +60,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
         image = Image.open(io.BytesIO(image_bytes))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"画像の読み込みに失敗しました: {str(e)}")
+
 
     # 2. Gemini APIへのプロンプト定義と構造化出力リクエスト
     prompt = """
