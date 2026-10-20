@@ -108,15 +108,15 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
     # 3. 抽出データを Supabase (flyer_items テーブル) に括挿入 (INSERT)
     db_records = []
     for item in extracted_data.items:
-        db_records.append({
-            "store_name": extracted_data.store_name,
-            "product_name": item.product_name,
-            "price": item.price,
-            "capacity": item.capacity
-            "manufacturer": item.manufacturer,      # 追加
-            "start_date": item.start_date,            # 追加
-            "end_date": item.end_date,                # 追加
-                      })
+            supabase.table("flyer_items").insert({
+                "store_name": extracted_data.store_name,
+                "product_name": item.product_name,
+                "capacity": item.capacity,
+                "price": item.price,
+                "manufacturer": item.manufacturer,      # 追加
+                "start_date": item.start_date,            # 追加
+                "end_date": item.end_date,                # 追加
+            }).execute()
 
     if db_records:
         try:
