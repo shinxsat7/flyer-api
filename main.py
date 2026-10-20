@@ -106,22 +106,22 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gemini APIによる解析エラー: {str(e)}")
 
-    # 3. 抽出データを Supabase (flyer_items テーブル) に括挿入 (INSERT)
+    # 3. 抽出データを Supabase (flyer_items テーブル) に一括挿入 (INSERT)
     db_records = []
     for item in extracted_data.items:
-            supabase.table("flyer_items").insert({
-                "store_name": extracted_data.store_name,
-                "product_name": item.product_name,
-                "capacity": item.capacity,
-                "price": item.price,
-                "manufacturer": item.manufacturer,      # 追加
-                "start_date": item.start_date,            # 追加
-                "end_date": item.end_date,                # 追加
-            }).execute()
-
+        db_records.append({
+            "store_name": extracted_data.store_name,
+            "product_name": item.product_name,
+            "capacity": item.capacity,
+            "price": item.price,
+            "manufacturer": item.manufacturer,
+            "start_date": item.start_date,
+            "end_date": item.end_date,
+        })
+    
     if db_records:
         try:
-            # Supabaseへデータ挿入
+            # Supabaseへまとめてデータ挿入
             supabase.table("flyer_items").insert(db_records).execute()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"データベース保存エラー: {str(e)}")
@@ -132,7 +132,6 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
         "message": f"{len(db_records)}件の商品データを抽出し、DBに保存しました。",
         "data": extracted_data
     }
-
 
 # サーバ起動用の動作テスト確認ルート
 @app.get("/")
