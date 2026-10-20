@@ -46,8 +46,9 @@ class FlyerItem(BaseModel):
     capacity: Optional[str] = Field(None, description="容量やサイズ（例: 500ml, 1kg）")
     price: int = Field(..., description="価格（税抜または税込の数値）")
     manufacturer: Optional[str] = Field(None, description="メーカー名（判別できる場合。例: 明治、コカ・コーラなど）")
-    start_date: Optional[str] = Field(None, description="セールの適用開始日（例: 10/1, 10月1日など）")
-    end_date: Optional[str] = Field(None, description="セールの適用終了日（例: 10/7, 10月7日など）")
+    start_date: Optional[str] = Field(None, description="セールの適用開始日。必ず 'yyyy/mm/dd' 形式（例: 2026/10/01）で抽出してください。年が記載されていない場合は現在の西暦を補完し、判別できない場合は null にしてください。")
+    end_date: Optional[str] = Field(None, description="セールの適用終了日。必ず 'yyyy/mm/dd' 形式（例: 2026/10/07）で抽出してください。年が記載されていない場合は現在の西暦を補完し、判別できない場合は null にしてください。")
+    
 
 # チラシ全体の抽出結果
 class FlyerResponse(BaseModel):
