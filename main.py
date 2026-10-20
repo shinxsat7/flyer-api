@@ -100,7 +100,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
         )
         
         # Pydanticモデルとしてパース
-        # extracted_data = FlyerExtraction.model_validate_json(response.text)
+        extracted_data = FlyerResponse.model_validate_json(response.text)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gemini APIによる解析エラー: {str(e)}")
