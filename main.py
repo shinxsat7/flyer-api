@@ -28,14 +28,33 @@ app = FastAPI(title="チラシ価格データ抽出API")
 # ==========================================
 # 2. Pydanticデータモデル定義（構造化抽出用）
 # ==========================================
-class Item(BaseModel):
-    product_name: str = Field(description="商品名")
-    price: int = Field(description="価格（税抜きまたは税込の数字のみ）")
-    capacity: Optional[str] = Field(None, description="容量・規格（例: 100g, 1袋, 1000mlなど。不明な場合はnull）")
+from pydantic import BaseModel, Field
+from typing import List, Optional
 
-class FlyerExtraction(BaseModel):
-    store_name: str = Field(description="スーパーや店舗の名前")
-    items: List[Item] = Field(description="抽出された商品のリスト")
+#class Item(BaseModel):
+#    product_name: str = Field(description="商品名")
+#    price: int = Field(description="価格（税抜きまたは税込の数字のみ）")
+#    capacity: Optional[str] = Field(None, description="容量・規格（例: 100g, 1袋, 1000mlなど。不明な場合はnull）")
+
+#class FlyerExtraction(BaseModel):
+#    store_name: str = Field(description="スーパーや店舗の名前")
+#    items: List[Item] = Field(description="抽出された商品のリスト")
+
+# 各商品の詳細
+class FlyerItem(BaseModel):
+    product_name: str = Field(..., description="商品名")
+    capacity: Optional[str] = Field(None, description="容量やサイズ（例: 500ml, 1kg）")
+    price: int = Field(..., description="価格（税抜または税込の数値）")
+    manufacturer: Optional[str] = Field(None, description="メーカー名（判別できる場合。例: 明治、コカ・コーラなど）")
+    start_date: Optional[str] = Field(None, description="セールの適用開始日（例: 10/1, 10月1日など）")
+    end_date: Optional[str] = Field(None, description="セールの適用終了日（例: 10/7, 10月7日など）")
+
+# チラシ全体の抽出結果
+class FlyerResponse(BaseModel):
+    store_name: str = Field(..., description="店舗名（スーパーの名前など）")
+    items: List[FlyerItem] = Field(..., description="抽出された商品リスト")
+
+
 
 
 # ==========================================
@@ -94,7 +113,10 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
             "product_name": item.product_name,
             "price": item.price,
             "capacity": item.capacity
-        })
+            "manufacturer": item.manufacturer,      # 追加
+            "start_date": item.start_date,            # 追加
+            "end_date": item.end_date,                # 追加
+                      })
 
     if db_records:
         try:
