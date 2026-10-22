@@ -95,10 +95,11 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
     2. 商品リスト (items):
        - 商品名 (product_name)
        - 容量・サイズ (capacity: 例「500ml」「1kg」など。記載がない場合はnull)
-       - 価格 (price: カンマや「円」を除いた半角数字のみ)
+       - 価格 (price: カンマや「円」を除いた半角数字のみ、税込みと税抜きを切り分け、税込み金額を採用する。単位が「%」の場合は価格とみなさない。)
        - メーカー名 (manufacturer: 判別できる場合のみ記載。不明な場合はnull)
        - 適用開始日 (start_date: セールの開始日。必ず "yyyy/mm/dd" 形式（例: 2026/10/01）で抽出してください。年が省略されている場合は現在年を補完し、現在月が12月の時、月が1月の時は次年度の1月とみなす、複数の日付が存在する場合、枠線で囲まれている部分別に日付を判断してください。判断できない場合は日付の一番古い日をセットする)
        - 適用終了日 (end_date: セールの終了日。必ず "yyyy/mm/dd" 形式（例: 2026/10/07）で抽出してください。年が省略されている場合は現在年を補完し、現在月が12月の時、月が1月の時は次年度の1月とみなす、判断できない場合は日付の一番古い日をセットする)
+       - 判読率 (recognition_rate: 判読できている確立を最大100%として、正しく判読できている確立を示す）
     """
 
 
@@ -131,6 +132,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
             "manufacturer": item.manufacturer,
             "start_date": item.start_date,
             "end_date": item.end_date,
+            "recognition_rate": item.recognition_rate,
         })
     
     if db_records:
