@@ -56,6 +56,17 @@ class FlyerResponse(BaseModel):
     store_name: str = Field(..., description="店舗名（スーパーの名前など）")
     items: List[FlyerItem] = Field(..., description="抽出された商品リスト")
 
+# 更新用データモデル
+class FlyerItemUpdate(BaseModel):
+    id: int  # レコードの固有ID
+    store_name: Optional[str] = None
+    product_name: Optional[str] = None
+    price: Optional[int] = None
+    capacity: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    manufacturer: Optional[str] = None
+
 
 
 
@@ -154,3 +165,27 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
 @app.get("/")
 def read_root():
     return {"message": "チラシ抽出APIサーバーは正常に稼働しています。"}
+
+
+# ① データ取得用エンドポイント
+@app.get("/items")
+async def get_all_items():
+    try:
+        # 登録日時の新しい順に全件取得
+        response = supabase.table("flyer_items").select("*").order("created_at", desc=True).execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ② 一括更新用エンドポイント（⑥ 修正された行のレコードを更新）
+@app.put("/items/batch")
+async def update_items_batch(items: List[FlyerItemUpdate]):
+    try:
+        for item in items:
+            update_data = item.dict(exclude_unset=True)
+            item_id = update_data.pop("id", None)
+            if item_id is not None:
+                supabase.table("flyer_items").update(update_data).eq("id", item_id).execute()
+        return {"status": "success", "message": "正常に更新しました"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
