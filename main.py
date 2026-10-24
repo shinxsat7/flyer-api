@@ -58,7 +58,7 @@ class FlyerResponse(BaseModel):
 
 # 更新用データモデル
 class FlyerItemUpdate(BaseModel):
-    id: int  # レコードの固有ID
+    id: str  # レコードの固有ID
     store_name: Optional[str] = None
     product_name: Optional[str] = None
     price: Optional[int] = None
