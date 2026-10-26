@@ -189,3 +189,26 @@ async def update_items_batch(items: List[FlyerItemUpdate]):
         return {"status": "success", "message": "正常に更新しました"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+        
+# 商品名検索用エンドポイント
+@app.get("/items/search")
+async def search_items(keyword: str = ""):
+    try:
+        # ベースのクエリ作成
+        query = supabase.table("flyer_items").select("*")
+        
+        # キーワードが指定されている場合は部分一致検索 (LIKE '%キーワード%')
+        if keyword:
+            query = query.ilike("product_name", f"%{keyword}%")
+            
+        # ご指定の並び順（order by capacity, manufacturer, product_name, price）
+        response = (
+            query.order("capacity")
+                 .order("manufacturer")
+                 .order("product_name")
+                 .order("price")
+                 .execute()
+        )
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
