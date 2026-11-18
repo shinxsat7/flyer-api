@@ -112,7 +112,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
         #    model='gemini-3.5-flash-lite',
 
         response = genai_client.models.generate_content(
-             model='gemini-3.1-flash-lite',
+             model='gemini-3.8-flash',
 	    contents=[image, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
