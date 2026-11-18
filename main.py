@@ -1,4 +1,5 @@
-import traceback  # ← ファイルの一番上に必ず追加してください
+import traceback
+import time
 import io
 import os
 from fastapi import FastAPI, File, UploadFile, HTTPException
@@ -7,6 +8,7 @@ from typing import List, Optional
 from PIL import Image
 from google import genai
 from google.genai import types
+from google.genai.errors import ServerError, APIError
 from supabase import create_client, Client
 
 # ==========================================
@@ -25,6 +27,19 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # FastAPI アプリケーションの定義
 app = FastAPI(title="チラシ価格データ抽出API")
 
+# 503エラー時に即座に別モデルへ切り替えるための優先順位リスト
+MODELS_TO_TRY = [
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
+
+# 1モデルあたりの無駄なリトライ待機を防ぐ設定
+FAST_FAIL_OPTIONS = types.HttpOptions(
+    retry_options=types.HttpRetryOptions(attempts=1)
+)
+
 
 # ==========================================
 # 2. Pydanticデータモデル定義（構造化抽出用）
@@ -40,7 +55,9 @@ class FlyerItem(BaseModel):
     end_date: Optional[str] = Field(None, description="セールの適用終了日。必ず 'yyyy/mm/dd' 形式（例: 2026/10/07）で抽出してください。")
     recognition_rate: Optional[str] = Field(None, description="判読率 (判読できている確率を最大100%として％で示す)")
     
-    # 追加：チラシ上の位置情報と並び順
+    # チラシ上の位置情報と並び順
+    vertical_pos: Optional[str] = Field(None, description="チラシ全体における縦位置（'上段', '中段', '下段' のいずれか）")
+    horizontal_pos: Optional[str] = Field(None, description="チラシ全体における横位置（'左', '中央', '右' のいずれか）")
     bounding_box: Optional[List[int]] = Field(None, description="画像内の商品位置を示すバウンディングボックス [ymin, xmin, ymax, xmax]（0〜1000スケール）")
     sort_order: int = Field(1, description="チラシ上で左上から右、下の行へ進む読取順の番号（1から開始）")
 
@@ -49,6 +66,7 @@ class FlyerItem(BaseModel):
 class FlyerResponse(BaseModel):
     store_name: str = Field(..., description="店舗名（スーパーの名前など）")
     items: List[FlyerItem] = Field(..., description="抽出された商品リスト")
+
 
 # 更新用データモデル
 class FlyerItemUpdate(BaseModel):
@@ -60,10 +78,10 @@ class FlyerItemUpdate(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     manufacturer: Optional[str] = None
+    vertical_pos: Optional[str] = None
+    horizontal_pos: Optional[str] = None
     sort_order: Optional[int] = None
     bounding_box: Optional[List[int]] = None
-
-
 
 
 # ==========================================
@@ -79,13 +97,16 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
     # 1. 画像ファイルのバリデーション・読み込み
     filename = file.filename.lower() if file.filename else ""
     is_image_ext = filename.endswith((".jpg", ".jpeg", ".png", ".heic", ".webp"))
+    content_type = file.content_type or ""
     
-    if not (file.content_type.startswith("image/") or is_image_ext):
+    if not (content_type.startswith("image/") or is_image_ext):
         raise HTTPException(status_code=400, detail="アップロードされたファイルは画像ではありません。")
     
     try:
         image_bytes = await file.read()
         image = Image.open(io.BytesIO(image_bytes))
+        # API負荷軽減・タイムアウト防止のため長辺を最大1024pxにリサイズ
+        image.thumbnail((1024, 1024))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"画像の読み込みに失敗しました: {str(e)}")
 
@@ -103,37 +124,59 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
        - 適用開始日 (start_date: "yyyy/mm/dd" 形式。不明な場合はnull)
        - 適用終了日 (end_date: "yyyy/mm/dd" 形式。不明な場合はnull)
        - 判読率 (recognition_rate: 正しく判読できている確率)
+       - 縦位置 (vertical_pos: チラシ全体を縦に3分割したときの位置。「上段」「中段」「下段」のいずれか)
+       - 横位置 (horizontal_pos: チラシ全体を横に3分割したときの位置。「左」「中央」「右」のいずれか)
        - 座標情報 (bounding_box: 画像内の商品位置 [ymin, xmin, ymax, xmax] (0〜1000の相対座標))
        - 読取順 (sort_order: チラシを上から下、左から右へ読む人間の視線の動き（行優先）に合わせて、左上を1として右へ進み、端に達したら次の行の左端に戻る順番で1から連番を振ってください)
     """
 
-    try:
-        # 最新のGeminiモデルを呼び出し
-        #    model='gemini-3.5-flash-lite',
+    # 3. 複数モデルによるフォールバック解析
+    response = None
+    last_error = None
 
-        response = genai_client.models.generate_content(
-             model='gemini-3.8-flash',
-	    contents=[image, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=FlyerResponse,  # ← FlyerResponse に変更する
-                temperature=0.1,
-            ),
+    for model_name in MODELS_TO_TRY:
+        try:
+            print(f"モデル試行中: {model_name}")
+            response = genai_client.models.generate_content(
+                model=model_name,
+                contents=,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=FlyerResponse,
+                    temperature=0.1,
+                    http_options=FAST_FAIL_OPTIONS,
+                ),
+            )
+            print(f"解析成功モデル: {model_name}")
+            break
+
+        except (ServerError, APIError) as e:
+            print(f"{model_name} 失敗 (status={getattr(e, 'code', 'unknown')}): 次のモデルへ切り替えます -> {e}")
+            last_error = e
+            time.sleep(0.5)
+            continue
+
+        except Exception as e:
+            print("=== 予期せぬエラー詳細 ===")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"API Error: {str(e)}")
+
+    if response is None:
+        print("=== 全モデル失敗 ===")
+        raise HTTPException(
+            status_code=503,
+            detail=f"現在すべてのAIモデルが混雑しています。少し時間を置いて再度お試しください。({str(last_error)})"
         )
-        
+
+    try:
         # Pydanticモデルとしてパース
         extracted_data = FlyerResponse.model_validate_json(response.text)
-
     except Exception as e:
-        print("=== Gemini API エラー詳細 ===")
+        print("=== JSONパースエラー詳細 ===")
         traceback.print_exc()
-        # HTMLではなく、具体的なエラー内容をJSONでアプリ側に返す
-        raise HTTPException(status_code=500, detail=f"API Error: {str(e)}")
-#        print("=== エラー詳細 ===")
-#        traceback.print_exc() # ここに表示されるエラー文が真の原因です
-#        raise HTTPException(status_code=500, detail=f"Gemini APIによる解析エラー: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"解析結果の変換に失敗しました: {str(e)}")
 
-    # 3. 抽出データを Supabase (flyer_items テーブル) に一括挿入 (INSERT)
+    # 4. 抽出データを Supabase (flyer_items テーブル) に一括挿入 (INSERT)
     db_records = []
     for item in extracted_data.items:
         db_records.append({
@@ -145,6 +188,8 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
             "start_date": item.start_date,
             "end_date": item.end_date,
             "recognition_rate": item.recognition_rate,
+            "vertical_pos": item.vertical_pos,
+            "horizontal_pos": item.horizontal_pos,
             "bounding_box": item.bounding_box,
             "sort_order": item.sort_order,
         })
@@ -154,14 +199,17 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
             # Supabaseへまとめてデータ挿入
             supabase.table("flyer_items").insert(db_records).execute()
         except Exception as e:
+            print("=== Supabase保存エラー詳細 ===")
+            traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"データベース保存エラー: {str(e)}")
 
-    # 4. レスポンス（スマホアプリへの返却データ）
+    # 5. レスポンス（スマホアプリへの返却データ）
     return {
         "status": "success",
         "message": f"{len(db_records)}件の商品データを抽出し、DBに保存しました。",
         "data": extracted_data
     }
+
 
 # サーバ起動用の動作テスト確認ルート
 @app.get("/")
@@ -173,26 +221,28 @@ def read_root():
 @app.get("/items")
 async def get_all_items():
     try:
-        # 左上から右・下へ進む sort_order 順で取得（同じ場合は作成日時など）
+        # 左上から右・下へ進む sort_order 順で取得
         response = supabase.table("flyer_items").select("*").order("sort_order", desc=False).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ② 一括更新用エンドポイント
 @app.put("/items/batch")
 async def update_items_batch(items: List[FlyerItemUpdate]):
     try:
         for item in items:
-            update_data = item.dict(exclude_unset=True)
+            update_data = item.model_dump(exclude_unset=True)
             item_id = update_data.pop("id", None)
             if item_id is not None:
                 supabase.table("flyer_items").update(update_data).eq("id", item_id).execute()
         return {"status": "success", "message": "正常に更新しました"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-        
-# 商品名検索用エンドポイント
+
+
+# ③ 商品名検索用エンドポイント
 @app.get("/items/search")
 async def search_items(keyword: str = ""):
     try:
@@ -201,7 +251,7 @@ async def search_items(keyword: str = ""):
         if keyword:
             query = query.ilike("product_name", f"%{keyword}%")
             
-        # 検索時もレイアウト順（sort_order）を綺麗に反映させる場合
+        # 検索時もレイアウト順（sort_order）を綺麗に反映させる
         response = query.order("sort_order", desc=False).execute()
         return response.data
     except Exception as e:
