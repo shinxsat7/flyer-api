@@ -108,9 +108,11 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
 
     try:
         # 最新のGeminiモデルを呼び出し
+        #    model='gemini-3.5-flash-lite',
+
         response = genai_client.models.generate_content(
-            model='gemini-3.5-flash-lite',
-            contents=[image, prompt],
+             model='gemini-3.8-flash',
+	    contents=[image, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=FlyerResponse,  # ← FlyerResponse に変更する
