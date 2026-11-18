@@ -1,3 +1,4 @@
+import traceback  # ← ファイルの一番上に必ず追加してください
 import io
 import os
 from fastapi import FastAPI, File, UploadFile, HTTPException
@@ -124,9 +125,13 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
         extracted_data = FlyerResponse.model_validate_json(response.text)
 
     except Exception as e:
-        print("=== エラー詳細 ===")
-        traceback.print_exc() # ここに表示されるエラー文が真の原因です
-        raise HTTPException(status_code=500, detail=f"Gemini APIによる解析エラー: {str(e)}")
+        print("=== Gemini API エラー詳細 ===")
+        traceback.print_exc()
+        # HTMLではなく、具体的なエラー内容をJSONでアプリ側に返す
+        raise HTTPException(status_code=500, detail=f"API Error: {str(e)}")
+#        print("=== エラー詳細 ===")
+#        traceback.print_exc() # ここに表示されるエラー文が真の原因です
+#        raise HTTPException(status_code=500, detail=f"Gemini APIによる解析エラー: {str(e)}")
 
     # 3. 抽出データを Supabase (flyer_items テーブル) に一括挿入 (INSERT)
     db_records = []
