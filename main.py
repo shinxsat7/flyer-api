@@ -139,7 +139,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
             print(f"モデル試行中: {model_name}")
             response = genai_client.models.generate_content(
                 model=model_name,
-                contents=,
+                contents=[image, prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=FlyerResponse,
