@@ -30,9 +30,9 @@ app = FastAPI(title="チラシ価格データ抽出API")
 # 503エラー時に即座に別モデルへ切り替えるための優先順位リスト
 MODELS_TO_TRY = [
     "gemini-3.8-flash",
-    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.7-flash",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
 ]
 
 # 1モデルあたりの無駄なリトライ待機を防ぐ設定
