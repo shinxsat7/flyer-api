@@ -29,9 +29,9 @@ app = FastAPI(title="チラシ価格データ抽出API")
 
 # 503エラー時に即座に別モデルへ切り替えるための優先順位リスト
 MODELS_TO_TRY = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash",
     "gemini-3.7-flash",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
     "gemini-2.5-flash",
 ]
 
@@ -144,7 +144,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
     【抽出項目とルール】
     1. 店舗名 (store_name)
     2. 商品リスト (items):
-       - 商品名 (product_name)
+       - 商品名 (product_name:価格1つに対して、複数の商品が紐づいているパターンもあるため、考慮する)
        - 容量・サイズ (capacity: 例「500ml」「1kg」など。記載がない場合はnull)
        - 価格 (price: カンマや「円」を除いた半角数字のみ、税込みと税抜きを切り分け、税込み金額を採用する。)
        - メーカー名 (manufacturer: 判別できる場合のみ。不明な場合はnull)
@@ -153,7 +153,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
        - 判読率 (recognition_rate: 正しく判読できている確率)
        - 縦位置 (vertical_pos: チラシ全体を縦に3分割したときの位置。「上段」「中段」「下段」のいずれか)
        - 横位置 (horizontal_pos: チラシ全体を横に3分割したときの位置。「左」「中央」「右」のいずれか)
-       - 座標情報 (bounding_box: 画像内の商品位置 [ymin, xmin, ymax, xmax] (0〜1000の相対座標) を必ず出力してください)
+       - 座標情報 (bounding_box: 画像内の価格部分の位置 [ymin, xmin, ymax, xmax] (0〜1000の相対座標) を必ず出力してください)
        - 読取順 (sort_order: 1以上の整数)
     """
 
