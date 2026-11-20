@@ -85,13 +85,66 @@ class FlyerItemUpdate(BaseModel):
 
 
 # ==========================================
-# 3. APIエンドポイントの実装
+# 3. 座標ベースで「左上→右→下の行→右下」の順を組み立てる関数
+# ==========================================
+def sort_items_top_left_to_bottom_right(items: List[FlyerItem], row_threshold: int = 40) -> List[FlyerItem]:
+    """
+    各商品の bounding_box [ymin, xmin, ymax, xmax] (0〜1000) をもとに、
+    紙面の左上から右へ向かい、行が変わったら次の行の左端から右へ進み、
+    最後が右下になる順番を組み立てて sort_order (1始まり) を付与します。
+    """
+    def get_coords(item: FlyerItem):
+        bbox = item.bounding_box
+        if bbox and len(bbox) >= 2:
+            ymin = bbox[0] if bbox[0] is not None else 9999
+            xmin = bbox[1] if bbox[1] is not None else 9999
+            return ymin, xmin
+        return 9999, 9999
+
+    # まず上端Y座標（ymin）で仮ソート
+    sorted_by_y = sorted(items, key=lambda it: (get_coords(it)[0], get_coords(it)[1]))
+
+    # ymin の近さ（row_threshold以内）で「同じ行グループ」にまとめる
+    rows: List[List[FlyerItem]] = []
+    current_row: List[FlyerItem] = []
+    current_row_ymin: Optional[int] = None
+
+    for item in sorted_by_y:
+        ymin, _ = get_coords(item)
+        if current_row_ymin is None:
+            current_row = [item]
+            current_row_ymin = ymin
+        elif abs(ymin - current_row_ymin) <= row_threshold:
+            current_row.append(item)
+        else:
+            rows.append(current_row)
+            current_row = [item]
+            current_row_ymin = ymin
+
+    if current_row:
+        rows.append(current_row)
+
+    # 各行の中では左から右（xmin昇順、同じならymin昇順）に並べ、全体を1本のリストへ結合
+    ordered_items: List[FlyerItem] = []
+    for row in rows:
+        row_sorted = sorted(row, key=lambda it: (get_coords(it)[1], get_coords(it)[0]))
+        ordered_items.extend(row_sorted)
+
+    # 最終的な並び順に 1 から始まる sort_order を設定
+    for idx, item in enumerate(ordered_items, start=1):
+        item.sort_order = idx
+
+    return ordered_items
+
+
+# ==========================================
+# 4. APIエンドポイントの実装
 # ==========================================
 @app.post("/extract", summary="チラシ画像から商品情報を抽出してDBに保存")
 async def extract_and_save_flyer(file: UploadFile = File(...)):
     """
     スマホアプリからアップロードされた画像を受信し、
-    Gemini APIで解析してSupabaseへ保存します。
+    Gemini APIで解析して座標順（左上→右下）に組み立てたうえでSupabaseへ保存します。
     """
 
     # 1. 画像ファイルのバリデーション・読み込み
@@ -126,8 +179,8 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
        - 判読率 (recognition_rate: 正しく判読できている確率)
        - 縦位置 (vertical_pos: チラシ全体を縦に3分割したときの位置。「上段」「中段」「下段」のいずれか)
        - 横位置 (horizontal_pos: チラシ全体を横に3分割したときの位置。「左」「中央」「右」のいずれか)
-       - 座標情報 (bounding_box: 画像内の商品位置 [ymin, xmin, ymax, xmax] (0〜1000の相対座標))
-       - 読取順 (sort_order: チラシを上から下、左から右へ読む人間の視線の動き（行優先）に合わせて、左上を1として右へ進み、端に達したら次の行の左端に戻る順番で1から連番を振ってください)
+       - 座標情報 (bounding_box: 画像内の商品位置 [ymin, xmin, ymax, xmax] (0〜1000の相対座標) を必ず出力してください)
+       - 読取順 (sort_order: チラシの左上から右へ進み、行が変わったら次の行の左端から右へ進み、最後が右下になる順番で1から連番を振ってください)
     """
 
     # 3. 複数モデルによるフォールバック解析
@@ -176,9 +229,13 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"解析結果の変換に失敗しました: {str(e)}")
 
-    # 4. 抽出データを Supabase (flyer_items テーブル) に一括挿入 (INSERT)
+    # 座標（bounding_box）をもとに「左上 → 右 → 下の行 → 右下」の順番を確定し、sort_order を 1..N で採番
+    ordered_items = sort_items_top_left_to_bottom_right(extracted_data.items, row_threshold=40)
+    extracted_data.items = ordered_items
+
+    # 4. 並び順確定後のデータを Supabase (flyer_items テーブル) に一括挿入 (INSERT)
     db_records = []
-    for item in extracted_data.items:
+    for item in ordered_items:
         db_records.append({
             "store_name": extracted_data.store_name,
             "product_name": item.product_name,
@@ -203,10 +260,10 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"データベース保存エラー: {str(e)}")
 
-    # 5. レスポンス（スマホアプリへの返却データ）
+    # 5. レスポンス（左上→右下の並び順になったデータを返却）
     return {
         "status": "success",
-        "message": f"{len(db_records)}件の商品データを抽出し、DBに保存しました。",
+        "message": f"{len(db_records)}件の商品データを左上→右下の順に並べてDBに保存しました。",
         "data": extracted_data
     }
 
