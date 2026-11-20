@@ -59,7 +59,7 @@ class FlyerItem(BaseModel):
     vertical_pos: Optional[str] = Field(None, description="チラシ全体における縦位置（'上段', '中段', '下段' のいずれか）")
     horizontal_pos: Optional[str] = Field(None, description="チラシ全体における横位置（'左', '中央', '右' のいずれか）")
     bounding_box: Optional[List[int]] = Field(None, description="画像内の商品位置を示すバウンディングボックス [ymin, xmin, ymax, xmax]（0〜1000スケール）")
-    sort_order: int = Field(1, description="チラシ上で左上から右、下の行へ進む読取順の番号（1から開始）")
+    sort_order: int = Field(1, description="bounding_box の昇順に基づいて割り当てられる連番（1から開始）")
 
 
 # チラシ全体の抽出結果
@@ -85,61 +85,26 @@ class FlyerItemUpdate(BaseModel):
 
 
 # ==========================================
-# 3. 座標ベースで「左上→右→次の行の左→右→右下」の順を組み立てる関数
+# 3. bounding_box の昇順でソートし sort_order を割り当てる関数
 # ==========================================
-def sort_items_top_left_to_bottom_right(items: List[FlyerItem], row_threshold: int = 45) -> List[FlyerItem]:
+def sort_items_by_bounding_box_asc(items: List[FlyerItem]) -> List[FlyerItem]:
     """
-    各商品の bounding_box [ymin, xmin, ymax, xmax] (0〜1000) をもとに、
-    1. 上から下の行（ymin）へ進み
-    2. 各行の中では左（xmin小）から右（xmin大）へ進み
-    3. 最後が右下になる順番を組み立てて sort_order (1始まり) を付与します。
+    各商品の bounding_box [ymin, xmin, ymax, xmax] の昇順（小さい順）でソートし、
+    並び順に応じて 1 から始まる sort_order を割り当てます。
     """
-    def get_coords(item: FlyerItem):
+    def bbox_sort_key(item: FlyerItem):
         bbox = item.bounding_box
-        if bbox and len(bbox) >= 2:
-            ymin = int(bbox[0]) if bbox[0] is not None else 9999
-            xmin = int(bbox[1]) if bbox[1] is not None else 9999
-            return ymin, xmin
-        return 9999, 9999
+        if not bbox:
+            return (999999, 999999, 999999, 999999)
+        vals = [int(v) if v is not None else 999999 for v in bbox[:4]]
+        while len(vals) < 4:
+            vals.append(999999)
+        return (vals[0], vals[1], vals[2], vals[3])
 
     if not items:
         return []
 
-    # まず上端Y座標（ymin）昇順、同じなら左端X座標（xmin）昇順で並べる
-    sorted_by_y = sorted(items, key=lambda it: (get_coords(it)[0], get_coords(it)[1]))
-
-    # 近い ymin を持つ商品を「同じ横並びの行」にグループ化
-    rows: List[List[FlyerItem]] = []
-    current_row: List[FlyerItem] = []
-    current_row_ymin_sum: int = 0
-
-    for item in sorted_by_y:
-        ymin, _ = get_coords(item)
-        if not current_row:
-            current_row = [item]
-            current_row_ymin_sum = ymin
-        else:
-            current_row_avg_ymin = current_row_ymin_sum / len(current_row)
-            if abs(ymin - current_row_avg_ymin) <= row_threshold:
-                current_row.append(item)
-                current_row_ymin_sum += ymin
-            else:
-                rows.append(current_row)
-                current_row = [item]
-                current_row_ymin_sum = ymin
-
-    if current_row:
-        rows.append(current_row)
-
-    # 行自体も平均ymin（または先頭ymin）の昇順で並べ、各行内は必ず左（xmin小）→右（xmin大）にソート
-    rows.sort(key=lambda r: sum(get_coords(it)[0] for it in r) / len(r))
-
-    ordered_items: List[FlyerItem] = []
-    for row in rows:
-        row_sorted = sorted(row, key=lambda it: (get_coords(it)[1], get_coords(it)[0]))
-        ordered_items.extend(row_sorted)
-
-    # 左上→右→下の行の左→右→右下の順に 1 から始まる sort_order を設定
+    ordered_items = sorted(items, key=bbox_sort_key)
     for idx, item in enumerate(ordered_items, start=1):
         item.sort_order = idx
 
@@ -153,7 +118,7 @@ def sort_items_top_left_to_bottom_right(items: List[FlyerItem], row_threshold: i
 async def extract_and_save_flyer(file: UploadFile = File(...)):
     """
     スマホアプリからアップロードされた画像を受信し、
-    Gemini APIで解析して座標順（左上→右→下の行の左→右→右下）に組み立てたうえでSupabaseへ保存します。
+    Gemini APIで解析して bounding_box の昇順で sort_order を割り当てたうえでSupabaseへ保存します。
     """
 
     # 1. 画像ファイルのバリデーション・読み込み
@@ -172,7 +137,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"画像の読み込みに失敗しました: {str(e)}")
 
-    # 2. Gemini APIへのプロンプト定義（左上→右→下の行の左→右→右下を明示）
+    # 2. Gemini APIへのプロンプト定義
     prompt = """
     添付されたチラシ画像から、店舗名と記載されているすべての商品情報を正確に抽出してください。
 
@@ -189,7 +154,7 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
        - 縦位置 (vertical_pos: チラシ全体を縦に3分割したときの位置。「上段」「中段」「下段」のいずれか)
        - 横位置 (horizontal_pos: チラシ全体を横に3分割したときの位置。「左」「中央」「右」のいずれか)
        - 座標情報 (bounding_box: 画像内の商品位置 [ymin, xmin, ymax, xmax] (0〜1000の相対座標) を必ず出力してください)
-       - 読取順 (sort_order: 紙面の左上（上端Y座標が小さく左端X座標も小さい位置）から右へ進み、次の行へ移ったらその行の左端から右へ進み、最後が右下になる順番で1から連番を振ってください)
+       - 読取順 (sort_order: 1以上の整数)
     """
 
     # 3. 複数モデルによるフォールバック解析
@@ -238,8 +203,8 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"解析結果の変換に失敗しました: {str(e)}")
 
-    # 座標（bounding_box）をもとに「左上 → 右 → 下の行の左 → 右 → 右下」の順番を確定し、sort_order を 1..N で採番
-    ordered_items = sort_items_top_left_to_bottom_right(extracted_data.items, row_threshold=45)
+    # bounding_box の昇順でソートし、1から始まる sort_order を割り当て
+    ordered_items = sort_items_by_bounding_box_asc(extracted_data.items)
     extracted_data.items = ordered_items
 
     # 4. 並び順確定後のデータを Supabase (flyer_items テーブル) に一括挿入 (INSERT)
@@ -262,17 +227,17 @@ async def extract_and_save_flyer(file: UploadFile = File(...)):
     
     if db_records:
         try:
-            # 並び替え済みの db_records をそのまま Supabase へ登録
+            # bounding_box 昇順で sort_order を割り当てたレコードを Supabase へ登録
             supabase.table("flyer_items").insert(db_records).execute()
         except Exception as e:
             print("=== Supabase保存エラー詳細 ===")
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"データベース保存エラー: {str(e)}")
 
-    # 5. レスポンス（左上→右→下の行の左→右→右下の並び順になったデータを返却）
+    # 5. レスポンス
     return {
         "status": "success",
-        "message": f"{len(db_records)}件の商品データを左上→右下の順に並べてDBに保存しました。",
+        "message": f"{len(db_records)}件の商品データをbounding_box昇順でsort_orderを割り当ててDBに保存しました。",
         "data": extracted_data
     }
 
